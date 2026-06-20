@@ -50,7 +50,8 @@ ${lastMoves.map(m =>
 
 Última jugada del jugador: ${lastHuman?.san ?? "—"} en ${((lastHuman?.thinkingTimeMs ?? 0) / 1000).toFixed(1)} segundos.
 ${movedFast ? "Movió muy rápido. Advertirle y darle una pista de lo que debería pensar." : "Tomó su tiempo. Analizar la jugada brevemente."}
-`.trim();
+
+Responde en español:`.trim();
 
   let lmStudioResponse: Response;
   try {
