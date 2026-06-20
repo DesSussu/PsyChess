@@ -65,6 +65,7 @@ export default function Tablero({ onMoveRecorded }: TableroProps) {
         player:         'maia',
         thinkingTimeMs: 0,
         isTilt:         false,
+        fen:            gameAfterMaiaMove.fen(),
       });
 
       // Maia is done — the player's clock starts now.
@@ -108,10 +109,11 @@ export default function Tablero({ onMoveRecorded }: TableroProps) {
       const isTilt         = thinkingTimeMs < TILT_THRESHOLD_MS;
 
       onMoveRecorded({
-        san: playerMove.san,
-        player: 'human',
+        san:            playerMove.san,
+        player:         'human',
         thinkingTimeMs,
         isTilt,
+        fen:            gameAfterPlayerMove.fen(),
       });
 
       // Update the board with the player's move.

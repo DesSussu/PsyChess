@@ -6,4 +6,5 @@ export type MoveRecord = {
   player: 'human' | 'maia';
   thinkingTimeMs: number; // how long the human took to move (0 for Maia moves)
   isTilt: boolean;        // true if the human moved faster than TILT_THRESHOLD_MS
+  fen: string;            // board position AFTER this move, in FEN notation
 };

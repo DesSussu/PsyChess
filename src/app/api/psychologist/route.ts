@@ -30,6 +30,7 @@ type RequestBody = {
     player: string;
     thinkingTimeMs: number;
     isTilt: boolean;
+    fen: string;
   }>;
 };
 
@@ -41,6 +42,8 @@ export async function POST(request: Request) {
   const movedFast   = lastHuman ? lastHuman.thinkingTimeMs < 2_000 : false;
 
   const userMessage = `
+Posición actual del tablero (FEN): ${lastHuman?.fen ?? "posición desconocida"}
+
 Historial de jugadas (últimas ${lastMoves.length}):
 ${lastMoves.map(m =>
   m.player === "human"
