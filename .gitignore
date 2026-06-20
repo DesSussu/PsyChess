@@ -42,3 +42,6 @@ next-env.d.ts
 
 # motor local (binarios grandes, no van en el repo)
 /engines
+
+CLAUDE.md
+AGENTS.md
