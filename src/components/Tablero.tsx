@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { Chess } from "chess.js";
 import { Chessboard } from "react-chessboard";
 import { pedirJugadaMaia } from "@/services/maia";
+import { TILT_THRESHOLD_MS, type MoveRecord } from "@/types/game";
 
 /**
  * Tablero — the chess board component.
@@ -17,10 +18,14 @@ import { pedirJugadaMaia } from "@/services/maia";
  * Move flow:
  *   1. Player drags a piece (white).
  *   2. chess.js validates the move is legal.
- *   3. We update the board with the player's move.
+ *   3. We record how long the player took to move (tilt detection).
  *   4. We ask Maia for a response via /api/maia.
- *   5. We apply Maia's move (black) to the board.
+ *   5. We apply Maia's move (black) to the board and reset the player's clock.
  */
+
+type TableroProps = {
+  onMoveRecorded: (move: MoveRecord) => void;
+};
 
 // Maia returns moves in UCI format: "e2e4" or "e7e8q" (pawn promotion).
 // This helper breaks that string into the parts that chess.js understands.
@@ -32,9 +37,14 @@ function parseUciMove(uciMove: string) {
   };
 }
 
-export default function Tablero() {
+export default function Tablero({ onMoveRecorded }: TableroProps) {
   const [game, setGame]                     = useState(() => new Chess());
   const [isMaiaThinking, setIsMaiaThinking] = useState(false);
+
+  // Tracks when the player's turn started. We use a ref because changing this
+  // value should NOT trigger a re-render — it's a timer, not display data.
+  // Starts immediately since the player moves first (white).
+  const playerTurnStartedAt = useRef<number>(Date.now());
 
   // Asks Maia for her move and applies it to the board.
   // Receives the game state AFTER the player has already moved.
@@ -46,15 +56,25 @@ export default function Tablero() {
 
       // Clone before applying Maia's move so React detects the state change.
       const gameAfterMaiaMove = new Chess(gameAfterPlayerMove.fen());
-      gameAfterMaiaMove.move({ from, to, promotion });
+      const maiaMove = gameAfterMaiaMove.move({ from, to, promotion });
 
       setGame(gameAfterMaiaMove);
+
+      onMoveRecorded({
+        san:            maiaMove.san,
+        player:         'maia',
+        thinkingTimeMs: 0,
+        isTilt:         false,
+      });
+
+      // Maia is done — the player's clock starts now.
+      playerTurnStartedAt.current = Date.now();
     } catch (error) {
       console.error("Maia did not respond:", error);
     } finally {
       setIsMaiaThinking(false);
     }
-  }, []);
+  }, [onMoveRecorded]);
 
   // Called by react-chessboard when the player drops a piece.
   // Returns true to confirm the move, or false to snap the piece back.
@@ -71,8 +91,9 @@ export default function Tablero() {
 
       // Try the move on a copy — chess.js throws if the move is illegal.
       const gameAfterPlayerMove = new Chess(game.fen());
+      let playerMove;
       try {
-        const playerMove = gameAfterPlayerMove.move({
+        playerMove = gameAfterPlayerMove.move({
           from: sourceSquare,
           to: targetSquare,
           promotion: "q", // auto-promote to queen for now
@@ -82,7 +103,18 @@ export default function Tablero() {
         return false;
       }
 
-      // The move was legal — update the board.
+      // Measure how long the player took since their turn started.
+      const thinkingTimeMs = Date.now() - playerTurnStartedAt.current;
+      const isTilt         = thinkingTimeMs < TILT_THRESHOLD_MS;
+
+      onMoveRecorded({
+        san: playerMove.san,
+        player: 'human',
+        thinkingTimeMs,
+        isTilt,
+      });
+
+      // Update the board with the player's move.
       setGame(gameAfterPlayerMove);
 
       // Ask Maia to respond, but only if the game is still going.
@@ -92,7 +124,7 @@ export default function Tablero() {
 
       return true;
     },
-    [game, isMaiaThinking, requestAndApplyMaiaMove]
+    [game, isMaiaThinking, onMoveRecorded, requestAndApplyMaiaMove]
   );
 
   // currentPosition is derived from game on every render.
