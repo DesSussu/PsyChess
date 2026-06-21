@@ -10,22 +10,9 @@ type ChatPsicologoProps = {
 
 type Message = {
   role: "psychologist";
-  // Full raw text including <think>...</think>.
-  // We strip the thinking block before displaying.
   rawContent: string;
 };
 
-/**
- * DeepSeek-R1 streams its internal reasoning inside <think>...</think> FIRST,
- * then sends the actual response after </think>.
- *
- * During streaming we handle three states:
- *   1. <think> not yet started       → show the text as-is
- *   2. <think> open, no </think> yet → return "" (show "Thinking…" placeholder)
- *   3. </think> closed               → show what comes AFTER it
- *      If nothing came after (model put everything inside <think>), fall back
- *      to showing the think content itself.
- */
 function getVisibleContent(rawText: string): string {
   const thinkStart = rawText.indexOf("<think>");
   const thinkEnd   = rawText.indexOf("</think>");
@@ -37,18 +24,45 @@ function getVisibleContent(rawText: string): string {
 
   if (afterThink) return afterThink;
 
-  // Fallback: model put its entire answer inside <think>.
   return rawText.slice(thinkStart + "<think>".length, thinkEnd).trim();
 }
 
-export default function ChatPsicologo({ moves }: ChatPsicologoProps) {
-  const [messages, setMessages]   = useState<Message[]>([]);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const bottomRef                 = useRef<HTMLDivElement>(null);
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      resolve(result.split(",")[1]);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
-  // Trigger a coach response after every human move.
+export default function ChatPsicologo({ moves }: ChatPsicologoProps) {
+  const [messages, setMessages]     = useState<Message[]>([]);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [boardImage, setBoardImage]  = useState<string | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const bottomRef                    = useRef<HTMLDivElement>(null);
+  const fileInputRef                 = useRef<HTMLInputElement>(null);
+
   const lastMove = moves.at(-1);
   const shouldIntervene = lastMove?.player === "human";
+
+  async function handleImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const b64 = await fileToBase64(file);
+    setBoardImage(b64);
+    setImagePreview(URL.createObjectURL(file));
+  }
+
+  function clearImage() {
+    setBoardImage(null);
+    setImagePreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
 
   useEffect(() => {
     if (!shouldIntervene || isStreaming) return;
@@ -58,7 +72,7 @@ export default function ChatPsicologo({ moves }: ChatPsicologoProps) {
       setMessages(prev => [...prev, { role: "psychologist", rawContent: "" }]);
 
       try {
-        for await (const token of streamPsychologistResponse(moves)) {
+        for await (const token of streamPsychologistResponse(moves, boardImage ?? undefined)) {
           setMessages(prev => {
             const updated = [...prev];
             updated[updated.length - 1] = {
@@ -77,20 +91,44 @@ export default function ChatPsicologo({ moves }: ChatPsicologoProps) {
 
     fetchResponse();
 
-  // We only want to trigger when a new tilt move lands — not on every render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [moves.length]);
 
-  // Scroll to the bottom whenever a new message arrives.
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   return (
     <aside className="flex h-full flex-col rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-      <h2 className="mb-3 text-sm font-semibold text-zinc-500">
-        Entrenador (DeepSeek-R1)
-      </h2>
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-zinc-500">Entrenador IA</h2>
+        <label className="cursor-pointer rounded px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+          📷 Analizar imagen
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleImageSelect}
+          />
+        </label>
+      </div>
+
+      {imagePreview && (
+        <div className="mb-3 flex items-start gap-2">
+          <img
+            src={imagePreview}
+            alt="Tablero seleccionado"
+            className="max-h-20 rounded border border-zinc-200 object-contain dark:border-zinc-700"
+          />
+          <button
+            onClick={clearImage}
+            className="mt-1 text-xs text-zinc-400 hover:text-zinc-600"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto space-y-3">
         {messages.length === 0 && (
@@ -102,7 +140,7 @@ export default function ChatPsicologo({ moves }: ChatPsicologoProps) {
         {messages.map((msg, index) => (
           <div key={index} className="space-y-2">
             <p className="text-sm text-zinc-700 dark:text-zinc-300 leading-relaxed">
-              {msg.rawContent || <span className="text-zinc-400 italic">Analizando…</span>}
+              {getVisibleContent(msg.rawContent) || <span className="text-zinc-400 italic">Analizando…</span>}
             </p>
           </div>
         ))}

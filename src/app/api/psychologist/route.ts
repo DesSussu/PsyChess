@@ -1,19 +1,10 @@
-/**
- * POST /api/psychologist
- *
- * Sends the game context to DeepSeek-R1 running in LM Studio and streams
- * the response back to the client using Server-Sent Events (SSE).
- *
- * LM Studio exposes an OpenAI-compatible API at http://localhost:1234.
- * We forward the request there and pipe the stream directly to the browser.
- *
- * DeepSeek-R1 wraps its internal reasoning inside <think>...</think> tags.
- * The client is responsible for hiding that part and showing only the final response.
- */
-
 import { NextResponse } from "next/server";
+import { searchChessBooks } from "@/lib/chess-books";
 
-const LM_STUDIO_URL = "http://localhost:1234/v1/chat/completions";
+const NAN_URL         = process.env.NAN_BASE_URL        ?? "https://api.nan.builders/v1/chat/completions";
+const NAN_KEY         = process.env.NAN_API_KEY         ?? "";
+const AI_MODEL        = process.env.AI_MODEL             ?? "deepseek-v4-flash";
+const AI_VISION_MODEL = process.env.AI_VISION_MODEL      ?? "mimo-v2.5";
 
 const SYSTEM_PROMPT = `Eres un entrenador de ajedrez experto que analiza las partidas de un jugador principiante/intermedio en tiempo real.
 
@@ -32,14 +23,15 @@ type RequestBody = {
     isTilt: boolean;
     fen: string;
   }>;
+  boardImage?: string;
 };
 
 export async function POST(request: Request) {
-  const { moveHistory }: RequestBody = await request.json();
+  const { moveHistory, boardImage }: RequestBody = await request.json();
 
-  const lastMoves   = moveHistory.slice(-8);
-  const lastHuman   = [...moveHistory].reverse().find(m => m.player === "human");
-  const movedFast   = lastHuman ? lastHuman.thinkingTimeMs < 2_000 : false;
+  const lastMoves  = moveHistory.slice(-8);
+  const lastHuman  = [...moveHistory].reverse().find(m => m.player === "human");
+  const movedFast  = lastHuman ? lastHuman.thinkingTimeMs < 2_000 : false;
 
   const userMessage = `
 Posición actual del tablero (FEN): ${lastHuman?.fen ?? "posición desconocida"}
@@ -56,41 +48,56 @@ ${movedFast ? "Movió muy rápido. Advertirle y darle una pista de lo que deber�
 
 Responde en español:`.trim();
 
-  let lmStudioResponse: Response;
+  const bookContext = await searchChessBooks(`${lastHuman?.san ?? ""} ${lastHuman?.fen ?? ""}`);
+  const systemContent = bookContext
+    ? `${SYSTEM_PROMPT}\n\nContexto de libros de ajedrez:\n${bookContext}`
+    : SYSTEM_PROMPT;
+
+  const userContent = boardImage
+    ? [
+        { type: "image_url", image_url: { url: `data:image/jpeg;base64,${boardImage}` } },
+        { type: "text",      text: userMessage },
+      ]
+    : userMessage;
+
+  let aiResponse: Response;
   try {
-    lmStudioResponse = await fetch(LM_STUDIO_URL, {
+    aiResponse = await fetch(NAN_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type":  "application/json",
+        "Authorization": `Bearer ${NAN_KEY}`,
+      },
       body: JSON.stringify({
-        model: "deepseek-r1",
+        model: boardImage ? AI_VISION_MODEL : AI_MODEL,
         messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user",   content: userMessage },
+          { role: "system", content: systemContent },
+          { role: "user",   content: userContent },
         ],
         stream: true,
         temperature: 0.7,
+        ...(!boardImage ? { reasoning_effort: "medium" } : {}),
       }),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error("[psychologist] Failed to reach LM Studio:", message);
+    console.error("[psychologist] Failed to reach NaN Builders:", message);
     return NextResponse.json(
-      { error: `Could not connect to LM Studio: ${message}` },
+      { error: `Could not connect to NaN Builders: ${message}` },
       { status: 502 }
     );
   }
 
-  if (!lmStudioResponse.ok) {
-    const body = await lmStudioResponse.text();
-    console.error("[psychologist] LM Studio returned error:", lmStudioResponse.status, body);
+  if (!aiResponse.ok) {
+    const body = await aiResponse.text();
+    console.error("[psychologist] NaN Builders returned error:", aiResponse.status, body);
     return NextResponse.json(
-      { error: `LM Studio responded with ${lmStudioResponse.status}: ${body}` },
+      { error: `NaN Builders responded with ${aiResponse.status}: ${body}` },
       { status: 502 }
     );
   }
 
-  // Pipe the stream from LM Studio directly to the browser.
-  return new Response(lmStudioResponse.body, {
+  return new Response(aiResponse.body, {
     headers: {
       "Content-Type":  "text/event-stream",
       "Cache-Control": "no-cache",
